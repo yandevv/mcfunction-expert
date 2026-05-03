@@ -226,3 +226,11 @@ function mynamespace:loop/main
 data modify storage mynamespace:db counter set value 0
 execute store result storage mynamespace:db counter int 1 run scoreboard players get @s kills
 ```
+
+---
+
+## Architectural patterns from real datapacks
+
+For mid-scale design questions — minigames, multi-version packs, tracking systems, tick-heavy logic, role-based games, custom-item lifecycles — read `references/datapack-patterns.md`. It distills idioms from popular community datapacks (currently: Manhunt) organized by category: state machines, tick budgeting, entity-selection algorithms, cross-version dispatch, item identity & lifecycle, macros & storage, dimension handling, state transitions, teams & roles, initialization, naming.
+
+Reach for it whenever the user is *designing* something rather than asking about a single command.
