@@ -1,0 +1,5 @@
+.DS_Store
+build/
+__pycache__/
+*.pyc
+mcfunction-expert-workspace/

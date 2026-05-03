@@ -1,0 +1,23 @@
+{
+  "skill_name": "mcfunction-expert",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to create a new datapack from scratch using beet and bolt for Minecraft 1.21.4. Can you scaffold the whole project for me including the beet.json, a load function and a tick function?",
+      "expected_output": "A complete project scaffold: beet.json (with require bolt, pipeline bolt, minecraft 1.21.4, pack_format 61 or resolved via minecraft field), src/data/<namespace>/function/load.bolt and tick.bolt with basic content, and clear install/build instructions.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I'm making a datapack for 1.20.2 and I want a scoreboard-based kill counter that announces in chat when a player gets 10 player kills. How do I do this?",
+      "expected_output": "A working implementation with: scoreboard objective using minecraft.player_killed_entity:minecraft.player in load, a tick function (or execute as check) that detects score reaching 10, a tellraw/say announcement, and optionally resetting the score. Can be raw mcfunction or bolt.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I have this repetitive mcfunction and I want to convert it to bolt so I can use a loop instead of copy-pasting. Here it is:\n\nsummon minecraft:zombie ~0 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~1 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~2 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~3 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~4 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~5 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~6 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~7 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~8 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~9 ~ ~ {Tags:[\"wave\"]}",
+      "expected_output": "A .bolt file using `for i in range(10):` that generates the equivalent summon commands with f-string interpolation for the offset and tag. Should also show how to set up beet.json to use bolt.",
+      "files": []
+    }
+  ]
+}
