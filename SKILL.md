@@ -231,6 +231,14 @@ execute store result storage mynamespace:db counter int 1 run scoreboard players
 
 ## Architectural patterns from real datapacks
 
-For mid-scale design questions — minigames, multi-version packs, tracking systems, tick-heavy logic, role-based games, custom-item lifecycles — read `references/datapack-patterns.md`. It distills idioms from popular community datapacks (currently: Manhunt) organized by category: state machines, tick budgeting, entity-selection algorithms, cross-version dispatch, item identity & lifecycle, macros & storage, dimension handling, state transitions, teams & roles, initialization, naming.
+For mid-scale design questions — minigames, multi-version packs, tracking systems, tick-heavy logic, role-based games, custom-item lifecycles, procedural structures, loot tables — read `references/datapack-patterns.md`. It distills idioms from popular community datapacks (Manhunt, BattleTowers) organized by category:
+
+- State machines & global state, tick budgeting, entity-selection algorithms
+- Cross-version dispatch, item identity & lifecycle, macros & storage
+- Dimension handling, game-state transitions, teams & roles, entity manipulation
+- Initialization, naming conventions
+- **Structure worldgen** (Jigsaw pipeline, structure_set, template pools, additions pools)
+- **Processor lists** (block substitution, barrier-as-editor-marker removal)
+- **Loot tables** (vanilla table reuse, quality/luck scaling, nesting, location-conditional items, random_sequence, enchantment functions, mob drop tables, count distributions)
 
 Reach for it whenever the user is *designing* something rather than asking about a single command.
