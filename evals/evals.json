@@ -18,6 +18,24 @@
       "prompt": "I have this repetitive mcfunction and I want to convert it to bolt so I can use a loop instead of copy-pasting. Here it is:\n\nsummon minecraft:zombie ~0 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~1 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~2 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~3 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~4 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~5 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~6 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~7 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~8 ~ ~ {Tags:[\"wave\"]}\nsummon minecraft:zombie ~9 ~ ~ {Tags:[\"wave\"]}",
       "expected_output": "A .bolt file using `for i in range(10):` that generates the equivalent summon commands with f-string interpolation for the offset and tag. Should also show how to set up beet.json to use bolt.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "I'm building a QoL datapack with 5 features that players and admins should be able to toggle on/off at runtime without reloading the pack. I want all the feature settings stored in one place and the pack should remember them between reloads. How should I structure the configuration system?",
+      "expected_output": "A complete storage-based config system: a default_settings.mcfunction that uses 'execute unless data storage mypack_config:config config.feature run data modify ... set value 1' for each feature (so values survive reload). load.mcfunction calls default_settings. tick.mcfunction gates each feature with 'execute if data storage mypack_config:config config{feature:1} run function'. A toggle command uses 'data modify storage mypack_config:config config.feature set value 0'. Should explain why storage over scoreboard (no objectives per toggle, compound holds all state, survives reload without re-init, the unless-data pattern is idempotent).",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "I want to add a special lodestone block that does something every tick while it exists, and when it's broken the effect stops automatically. I also want some logic to run every 20 ticks and other logic every 2 ticks for performance. How do I architect this?",
+      "expected_output": "Two things: (1) Marker entity as block tracker: when lodestone is placed, summon a marker entity at align xyz positioned ~.5 ~.5 ~.5 unless one already exists. In tick, run 'execute as @e[type=marker,tag=mypack_lodestone] at @s run function mypack:block/tick'. Inside block/tick, check 'execute unless block ~ ~ ~ minecraft:lodestone run function mypack:block/on_broken' which kills the marker. (2) Multi-speed scheduled clocks: schedule separate clock functions in load.mcfunction (e.g., 'schedule function mypack:clock/2tick 2t' and 'schedule function mypack:clock/20tick 20t'). Each clock function ends with re-scheduling itself. Explain advantages over a single counter: clocks are independent and can be individually paused/cleared.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "I want a clickable in-game menu that players open by running /trigger stats. Clicking option 1 shows their kill count and option 2 shows deaths. Separately, I also want to detect when a player is holding the jump key (for a jump-boost ability). How do both of these work?",
+      "expected_output": "For trigger menu: in load, 'scoreboard objectives add stats trigger'. In per-player tick: 'scoreboard players enable @s stats', then branch 'execute if score @s stats matches 1 run function mypack:stats/kills', 'execute if score @s stats matches 2 run function mypack:stats/deaths', then 'execute if score @s stats matches 1.. run scoreboard players set @s stats 0' to reset. Menu opener uses tellraw with clickEvent run_command '/trigger stats set 1'. For jump detection: a predicate JSON at data/mypack/predicate/input/jumping.json with condition 'minecraft:entity_properties', entity 'this', predicate.type_specific.type 'minecraft:player', input.jump: true. Then 'execute as @a[predicate=mypack:input/jumping] run function mypack:boost_jump'. Should note input predicates require 1.21.3+ (pack_format 57+).",
+      "files": []
     }
   ]
 }

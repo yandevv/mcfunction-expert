@@ -64,6 +64,36 @@ execute if score Temp reg_1 matches 0 run function mypack:fallback
 
 ---
 
+## Runtime configuration
+
+### Storage-based feature toggle system
+
+**What it is.** A single data-storage compound (`mypack_config:config`) holds every feature flag as an integer. Defaults are set once with `execute unless data storage` so they survive `/reload` without resetting. Features are toggled at runtime by modifying that one path — no objectives, no restart needed.
+
+**Snippet.**
+```mcfunction
+# default_settings.mcfunction — safe to call on every load
+execute unless data storage mypack_config:config config.sitting  run data modify storage mypack_config:config config.sitting  set value 1
+execute unless data storage mypack_config:config config.graves   run data modify storage mypack_config:config config.graves   set value 1
+execute unless data storage mypack_config:config config.hud      run data modify storage mypack_config:config config.hud      set value 0
+
+# load.mcfunction — call default_settings every load
+function mypack:default_settings
+
+# tick.mcfunction — gate each feature
+execute if data storage mypack_config:config config{sitting:1}  run function mypack:sitting/tick
+execute if data storage mypack_config:config config{graves:1}   run function mypack:graves/tick
+
+# admin command to toggle a feature off at runtime
+data modify storage mypack_config:config config.sitting set value 0
+```
+
+**When to reach for it.** Any pack with multiple opt-in/opt-out features. The `unless data storage` pattern is safe to call on every `/reload` — it only writes the default if the key doesn't exist yet, so a server admin's manual changes survive reloads. Prefer this over a per-feature scoreboard objective when you have more than ~3 toggleable features; one compound is cleaner than many objectives.
+
+**Source.** Vanilla-Refresh (`function/other/default_settings.mcfunction`, `function/tick.mcfunction`).
+
+---
+
 ## Tick budgeting
 
 ### "Second" throttle via tick counter
@@ -84,6 +114,34 @@ scoreboard players set Temp tick_counter 0
 **When to reach for it.** Any per-second logic: pathfinding-style calculations, broadcasting compass updates, sidebar refreshes, scanning all players. Lighter than `schedule function … 20t` and easier to pause/resume — just stop incrementing the counter.
 
 **Source.** Manhunt (`tick.mcfunction` → `second.mcfunction`).
+
+### Multi-speed scheduled clock loops
+
+**What it is.** Instead of a single tick counter, use `schedule function` in `load.mcfunction` to start several independent clocks at different intervals (2t, 5t, 10t, 20t, 2min). Each clock function does its work, then reschedules itself, creating a self-sustaining loop that fires at that rate forever.
+
+**Snippet.**
+```mcfunction
+# load.mcfunction — start all clocks once
+schedule function mypack:clock/2tick  2t
+schedule function mypack:clock/20tick 20t
+schedule function mypack:clock/2min   2400t
+
+# clock/2tick.mcfunction
+# ... fast-update logic here (item ticks, per-entity animation) ...
+schedule function mypack:clock/2tick 2t
+
+# clock/20tick.mcfunction
+# ... per-second logic here (stat updates, compass refresh) ...
+schedule function mypack:clock/20tick 20t
+
+# clock/2min.mcfunction
+# ... slow logic here (health resets, player data sync) ...
+schedule function mypack:clock/2min 2400t
+```
+
+**When to reach for it.** When different features need different tick rates — fast animations at 2t, per-second stats at 20t, low-frequency background work at 2400t. Each clock is independent: you can cancel it with `schedule clear` or restart it without touching the others. This is preferable to a single counter when features have unrelated timing needs. Note: `schedule function` persists across `function vanilla_refresh:load` calls but is lost on world reload if you don't re-schedule in `load.mcfunction`.
+
+**Source.** Vanilla-Refresh (`function/load.mcfunction` lines 264–272, `function/other/clock/`).
 
 ### Gate the entire tick on an enabled flag
 
@@ -162,6 +220,32 @@ Same trick for `predicate/` ↔ `predicates/`, `item_modifier/` ↔ `item_modifi
 **When to reach for it.** Distributing a pack publicly across many MC versions. Skip if the user is on a single known version — the duplication isn't worth it.
 
 **Source.** Manhunt ships both spellings everywhere.
+
+### `pack.mcmeta` overlays for version-specific content (1.21.4+)
+
+**What it is.** The `overlays` field in `pack.mcmeta` (added in 1.20.2, pack_format 18) lets you ship a subdirectory that overrides files for specific pack_format ranges. When a player is on a supported version, Minecraft merges the overlay directory on top of the base pack. This is the modern way to handle version branches without duplicating every file.
+
+**Snippet.** (`pack.mcmeta`)
+```json
+{
+  "pack": {
+    "pack_format": 61,
+    "supported_formats": { "min_inclusive": 61, "max_inclusive": 999 },
+    "description": "My pack"
+  },
+  "overlays": {
+    "entries": [
+      { "directory": "1.21.6", "formats": { "min_inclusive": 80, "max_inclusive": 9999 } }
+    ]
+  }
+}
+```
+
+Put only the *changed* files in `1.21.6/data/...` — the overlay directory mirrors the pack structure but only needs to contain files that differ from the base. Files in the overlay take precedence over the base pack for players on matching formats.
+
+**When to reach for it.** Targeting 1.21.4+ (pack_format 61+) while also needing to support a newer snapshot/release that changed specific commands or NBT structures. Cleaner than the dual-directory approach for 1.21+ targets because only the changed files live in the overlay — base logic is not duplicated. The dual-directory approach (shipping both `function/` and `functions/` spellings) is still needed for packs that must support pre-1.21 versions.
+
+**Source.** Vanilla-Refresh (`pack.mcmeta` overlays entry for 1.21.6 content).
 
 ### `_new` / `_old` function variants for the NBT↔components break
 
@@ -276,6 +360,34 @@ $item modify entity @s hotbar.1 mypack:compass_lodestone {X:$(X),Y:$(Y),Z:$(Z)}
 
 **Source.** Manhunt (`item_modifiers/set_compass_nbt.json`).
 
+### NBT ↔ Scoreboard bidirectional sync
+
+**What it is.** `execute store result score` reads a numeric value from entity NBT into a scoreboard score. `execute store result entity` writes a scoreboard score back into entity NBT. Together they let you do scoreboard math on NBT values — which can't be computed directly — and write the result back.
+
+**Snippet.**
+```mcfunction
+# Read Motion[1] (vertical velocity) into a scoreboard score, scaled ×100 for integer precision
+execute store result score @s mypack_fallspeed run data get entity @s Motion[1] 100
+
+# Read a custom_data field into a score
+execute store result score @s mypack_charges run data get entity @s \
+  Item.components."minecraft:custom_data".MyItemCharges
+
+# Do scoreboard math on it
+scoreboard players remove @s mypack_charges 1
+
+# Write the updated score back to entity NBT
+execute store result entity @s \
+  Item.components."minecraft:custom_data".MyItemCharges int 1 \
+  run scoreboard players get @s mypack_charges
+```
+
+Scale factor rules: `data get entity @s Motion[1] 100` returns `floor(Motion[1] * 100)` as an integer. The reverse `store result entity ... int 1` stores the integer as-is. To write a double from a score, use `double 0.01` as the scale (divides the integer back by 100).
+
+**When to reach for it.** Any time you need to compute something about an entity's NBT — custom item charge counts, fall speed thresholds, entity health arithmetic — that requires more than a single comparison. Read into score, compute, write back. Also the correct approach for reading `Motion[]`, `Health`, `Pos[]`, `Rotation[]`, and `Age` into scoreboard math.
+
+**Source.** Vanilla-Refresh (`function/selector_all_players.mcfunction` Motion[1] capture, `function/entity/invis/invisible.mcfunction` custom_data sync).
+
 ---
 
 ## Dimension handling
@@ -366,6 +478,71 @@ execute as @e[tag=boss_mob] at @s if predicate mypack:boss_shoots run function m
 
 ---
 
+## Predicates & player input
+
+### Equipment slot predicates
+
+**What it is.** A predicate file that checks what a player is wearing in a specific armor slot. Reusable across functions and loot table conditions via `if predicate`. Reference item tags (with `#`) to match a family of items rather than a single type.
+
+**Snippet.** (`data/mypack/predicate/wearing/no_helmet.json`)
+```json
+{
+  "condition": "minecraft:entity_properties",
+  "entity": "this",
+  "predicate": {
+    "equipment": {
+      "head": {
+        "items": "#minecraft:air"
+      }
+    }
+  }
+}
+```
+
+```mcfunction
+# Check if player has no helmet before equipping
+execute as @a[predicate=mypack:wearing/no_helmet] run function mypack:player/equip_hat
+```
+
+Slots: `head`, `chest`, `legs`, `feet`, `mainhand`, `offhand`. Each takes an `items` field with a single item ID or `#tag` reference.
+
+**When to reach for it.** Checking what a player has equipped without inline NBT selectors. Predicate files are reusable across many functions and are easier to read than `nbt={Inventory:[...]}` queries in selectors. Also usable inside loot table conditions and advancement criteria.
+
+**Source.** Vanilla-Refresh (`data/vanilla_refresh/predicate/wearing/air.json`).
+
+### Player input predicates (1.21.3+)
+
+**What it is.** A predicate that detects real-time player control inputs (jump, sneak, sprint, forward, backward, left, right). More reliable than trying to infer input from position or NBT — reads directly from the server's player input state.
+
+**Snippet.** (`data/mypack/predicate/input/jumping.json`)
+```json
+{
+  "condition": "minecraft:entity_properties",
+  "entity": "this",
+  "predicate": {
+    "type_specific": {
+      "type": "minecraft:player",
+      "input": {
+        "jump": true
+      }
+    }
+  }
+}
+```
+
+```mcfunction
+# Detect jump held for a high-jump mechanic
+execute as @a[predicate=mypack:input/jumping] at @s run function mypack:player/boost_jump
+```
+
+Available input keys: `forward`, `backward`, `left`, `right`, `jump`, `sneak`, `sprint`. All are booleans. Requires pack_format 57+ (Minecraft 1.21.3+).
+
+**When to reach for it.** Any mechanic that triggers on player input: double-tap detection (track two consecutive ticks of the same input), jump-boost abilities, sneak-to-interact systems. Replaces polling `Motion[1]` or watching `OnGround` flag changes, which are unreliable proxies.
+
+**Source.** Vanilla-Refresh (`data/vanilla_refresh/predicate/input/jump.json`).
+
+---
+
 ## Game-state transitions
 
 ### Debounce major events with a countdown
@@ -389,6 +566,71 @@ execute if score Temp dragon_check matches 0 \
 **When to reach for it.** Detecting boss kills, structure destruction, "all enemies cleared" — anything where the test for absence has a transient false positive.
 
 **Source.** Manhunt (`hunt_second.mcfunction` dragon-death check).
+
+### Advancement revocation as one-shot trigger
+
+**What it is.** Trigger logic once whenever a player earns a specific advancement, then immediately revoke it so it can fire again next time. This turns vanilla advancement triggers (using_item, entity_hurt_player, etc.) into reusable event hooks without any extra scoreboard plumbing.
+
+**Snippet.**
+```mcfunction
+# per_player_tick.mcfunction — check and react, then reset
+execute if entity @s[advancements={mypack:events/used_spyglass=true}] run function mypack:player/spyglass_used
+advancement revoke @s only mypack:events/used_spyglass
+```
+
+(`data/mypack/advancement/events/used_spyglass.json`)
+```json
+{
+  "criteria": {
+    "requirement": {
+      "trigger": "minecraft:using_item",
+      "conditions": {
+        "item": { "items": ["minecraft:spyglass"] }
+      }
+    }
+  }
+}
+```
+
+The advancement has no `display` field — it's invisible to the player. The revoke happens every tick so there's a 1-tick window; run both the check and revoke in the same function for reliability.
+
+**When to reach for it.** Reacting to vanilla interactions that have an advancement trigger (crafting, item use, killing a specific mob, death by specific cause). Much simpler than polling NBT or maintaining a separate counter for the same event. The detect-react-revoke cycle costs less than a scoreboard objective when the event is infrequent.
+
+**Source.** Vanilla-Refresh (`function/selector_all_players.mcfunction`, `advancement/` directory with death, used, and biome events).
+
+### Trigger-based interactive menus
+
+**What it is.** A `trigger` scoreboard objective lets players run `/trigger <name> set <value>` (or click a `run_command` tellraw). Check the value in the per-player tick, execute the matching branch, then reset to 0. This is the standard pattern for clickable in-game menus without any mods.
+
+**Snippet.**
+```mcfunction
+# load.mcfunction
+scoreboard objectives add stats trigger
+scoreboard objectives add gamerules trigger
+
+# per_player_tick.mcfunction — enable and branch each tick
+scoreboard players enable @s stats
+execute if score @s stats matches 1 run function mypack:stats/show_kills
+execute if score @s stats matches 2 run function mypack:stats/show_deaths
+execute if score @s stats matches 1.. run scoreboard players set @s stats 0
+
+scoreboard players enable @s gamerules
+execute if score @s gamerules matches 1.. run function mypack:gamerules/root
+execute if score @s gamerules matches 1.. run scoreboard players set @s gamerules 0
+```
+
+```mcfunction
+# menu opener — clickable tellraw
+tellraw @s [
+  {"text":"[Show Kills]","color":"green","clickEvent":{"action":"run_command","value":"/trigger stats set 1"}},
+  {"text":" "},
+  {"text":"[Show Deaths]","color":"red","clickEvent":{"action":"run_command","value":"/trigger stats set 2"}}
+]
+```
+
+**When to reach for it.** Any in-game UI that needs player interaction: stats screens, settings panels, confirmation dialogs, help menus. The `trigger` objective only fires when the player explicitly sets it — it can't be set by commands except `scoreboard players enable`, so it's safe from unintended activation. Always reset to 0 after handling so the menu can be re-opened.
+
+**Source.** Vanilla-Refresh (`function/load.mcfunction` trigger objective setup, `function/selector_all_players.mcfunction` enable+branch pattern, `function/other_features/gamerules/`).
 
 ### Idempotent end-state functions
 
@@ -496,6 +738,75 @@ tag @e[tag=mypack_proj] remove mypack_proj
 
 ---
 
+## Marker entities & block tracking
+
+### Marker entity as pseudo-block owner
+
+**What it is.** Summon an invisible `marker` entity at a block's center position when the block is placed. All logic for that block runs `as @e[type=marker,tag=mypack_block]` so it has the right position context. Detect block removal by checking if the block is still there; kill the marker to stop all associated logic.
+
+**Snippet.**
+```mcfunction
+# on_block_placed.mcfunction — called when player places the special block
+# (e.g., triggered by an advancement for placing a lodestone)
+execute align xyz positioned ~.5 ~.5 ~.5 \
+  unless entity @e[distance=..0.01,type=marker,tag=mypack_block_owner] \
+  run summon marker ~ ~ ~ {Tags:["mypack_block_owner"]}
+
+# tick.mcfunction — process all tracked blocks
+execute as @e[type=marker,tag=mypack_block_owner] at @s run function mypack:block/tick
+
+# block/tick.mcfunction — runs as each marker at its block's position
+execute unless block ~ ~ ~ minecraft:lodestone run function mypack:block/on_removed
+# ... block logic here ...
+
+# block/on_removed.mcfunction
+kill @s
+```
+
+Use `align xyz positioned ~.5 ~.5 ~.5` to snap to block center before summoning — this ensures the marker is exactly centered even if the advancement triggers from a non-centered position.
+
+**When to reach for it.** Any block that needs ongoing per-tick logic: a jukebox that spawns particles while playing, a lodestone that maintains a linked marker, a furnace that triggers effects when smelting. Markers have no hitbox, no AI, and near-zero performance cost. The block removal check (`unless block ~ ~ ~`) gives you a free cleanup hook when the block is broken or replaced.
+
+**Source.** Vanilla-Refresh (`function/block/lodestone/raycast.mcfunction`, `function/block/lodestone/marker.mcfunction`, `function/other/clock/2tick.mcfunction` — marker-based jukebox/furnace/lodestone/ladder systems).
+
+---
+
+## Raycasting
+
+### Recursive local-Z forward raycast
+
+**What it is.** Cast a ray forward from an entity by recursively calling a function that advances `positioned ^ ^ ^<step>` (local Z axis = the direction the entity is facing). Check for a hit condition at each step; stop when you find a hit or exhaust the step limit.
+
+**Snippet.**
+```mcfunction
+# raycast_init.mcfunction — called as the caster entity
+scoreboard players set #ray_limit mypack_scratch 0
+execute positioned ~ ~1.62 ~ run function mypack:raycast/step   # eye-level offset
+
+# raycast/step.mcfunction — recursive
+scoreboard players add #ray_limit mypack_scratch 1
+
+# Check for hit at current position
+execute if block ~ ~ ~ minecraft:target run function mypack:raycast/on_hit
+
+# Recurse forward 0.5 blocks unless we've gone too far or hit something
+execute \
+  unless score #ray_limit mypack_scratch matches 20.. \
+  unless block ~ ~ ~ minecraft:target \
+  positioned ^ ^ ^.5 \
+  run function mypack:raycast/step
+
+scoreboard players reset #ray_limit mypack_scratch
+```
+
+Step size vs. iteration tradeoff: 0.05 blocks × 100 iterations = 5 block range (fine-grained, expensive). 0.5 blocks × 20 iterations = 10 block range (coarse, cheap). Use smaller steps only when you need sub-block precision. Always reset the counter score at the end of the outermost call, not inside the recursion, since the recursion unwinds before the reset runs.
+
+**When to reach for it.** Block detection in the direction a player is looking: "activate the lodestone you're aimed at", "shoot an invisible arrow", "find the first solid block ahead". For simpler "is there a block within N blocks straight ahead" checks, a single `execute if block ^ ^ ^N` may suffice — reach for full recursion only when you need the *closest* hit or per-step effects (particle trails).
+
+**Source.** Vanilla-Refresh (`function/block/lodestone/raycast.mcfunction` — 0.05 step, 100-iteration limit, lodestone detection).
+
+---
+
 ## Initialization
 
 ### `load` vs `first_load` idempotence
@@ -546,6 +857,49 @@ data merge storage mypack {Setup:1}
 
 **Source.** BattleTowers (`load.mcfunction` + `setup.mcfunction`).
 
+### Per-player tick sub-function
+
+**What it is.** Delegate all per-player logic from `tick.mcfunction` to a single sub-function called `execute as @a at @s`. This gives the sub-function proper player context (executor = player, position = player's feet) and keeps the root tick clean — it just calls global work plus one line per player.
+
+**Snippet.**
+```mcfunction
+# tick.mcfunction
+execute if data storage mypack_config:config config{feature_a:1} run function mypack:world_tick
+execute as @a at @s run function mypack:per_player_tick
+
+# per_player_tick.mcfunction
+execute unless score @s mypack_members matches -2147483648.. run function mypack:player/first_join
+execute if score 2tick mypack_clock matches 1 run function mypack:player/stats_update
+scoreboard players enable @s stats
+execute if score @s stats matches 1.. run function mypack:player/menu_stats
+execute if score @s stats matches 1.. run scoreboard players set @s stats 0
+```
+
+**When to reach for it.** Any pack with meaningful per-player logic. Separating per-player from per-world logic makes each file readable and prevents the root `tick.mcfunction` from growing into a 200-line wall. All per-player advancement checks, trigger handling, and state machines belong in this function.
+
+**Source.** Vanilla-Refresh (`function/tick.mcfunction` → `function/selector_all_players.mcfunction`).
+
+### First-join detection via score boundary
+
+**What it is.** Scoreboards default to having no score (not zero — unset). `matches -2147483648..` returns true if *any* integer is set; it fails if the score is absent. Use this to detect the first time a player joins: their member score doesn't exist yet, so the range check fails, and you run first-join setup exactly once.
+
+**Snippet.**
+```mcfunction
+# per_player_tick.mcfunction
+execute unless score @s mypack_members matches -2147483648.. run function mypack:player/first_join
+
+# player/first_join.mcfunction
+scoreboard players set @s mypack_members 1
+tellraw @s {"text":"Welcome! Run /trigger help for options.","color":"gold"}
+# ... other first-join setup ...
+```
+
+The `-2147483648..` (minimum int to infinity) pattern is the canonical "score exists?" test. Combine with `score @s mypack_members matches 1..` for subsequent join detection (value already set from a previous session).
+
+**When to reach for it.** Welcome messages, first-time tutorial hints, initializing per-player scores that shouldn't be set until a player actually joins. The same idiom works for global fake-player flags — see "load vs first_load idempotence" above, which uses the same trick for world-level setup.
+
+**Source.** Vanilla-Refresh (`function/selector_all_players.mcfunction` line 2).
+
 ---
 
 ## Naming conventions
@@ -565,6 +919,32 @@ data merge storage mypack {Setup:1}
 **When to reach for it.** Scratch-space scores used within a single function call that have no user-facing meaning. Keeps internal math visually separate from per-player state and global flags. Use regular fake-player names (no `#`) for globals intended to persist or be read by other functions.
 
 **Source.** BattleTowers (`fireball.mcfunction` uses `#casterX`, `#casterY`, `#casterZ`, `#fireballX`, `#fireballY`, `#fireballZ`).
+
+### Math constants via fake-player scores
+
+**What it is.** Create a dedicated "constants" objective in `load.mcfunction` and pre-set fake-player names to their own numeric values (`scoreboard players set 60 mypack_constants 60`). Use `scoreboard players operation @s mypack_var /= 60 mypack_constants` for integer division by that constant throughout the pack — never hardcode the divisor inline.
+
+**Snippet.**
+```mcfunction
+# load.mcfunction
+scoreboard objectives add mypack_constants dummy
+scoreboard players set 20  mypack_constants 20
+scoreboard players set 60  mypack_constants 60
+scoreboard players set 100 mypack_constants 100
+scoreboard players set 1000 mypack_constants 1000
+
+# convert ticks to seconds: ticks / 20 = seconds
+scoreboard players operation @s mypack_seconds = @s mypack_ticks
+scoreboard players operation @s mypack_seconds /= 20 mypack_constants
+
+# fixed-point to world scale: score / 1000 (since positions were stored × 1000)
+execute store result entity @e[tag=proj,limit=1] power[0] double 0.001 \
+  run scoreboard players get #projX mypack_scratch
+```
+
+**When to reach for it.** Any time you do repeated integer division or multiplication: tick→second conversion, fixed-point position math (store position × 1000 for precision, divide back for display), percentage calculations. Putting the constants in a named objective makes the intent obvious to future readers — `/ 60 mypack_constants` reads as "divide by 60" rather than a cryptic fake-player reference.
+
+**Source.** Vanilla-Refresh (`function/load.mcfunction` lines 220–261 — `refresh_constants` objective with 1, 2, 3, … 20, 60, 100, 1000 pre-set).
 
 ---
 
