@@ -27,13 +27,27 @@ If the user doesn't know or says "latest", default to **1.21.4** (pack_format 61
 
 ## Step 2: Choose the right approach
 
-| Situation | Use |
-|-----------|-----|
-| Simple pack, no tooling, just writing commands | **Raw `.mcfunction`** |
-| Need to manage multiple files, merge packs, or write Python plugins | **Beet** |
-| Need loops, variables, Python logic that generates commands | **Bolt** (requires Beet) |
+| Situation | Use | Why |
+|-----------|-----|-----|
+| Simple pack, no tooling, just writing commands | **Raw `.mcfunction`** | Zero dependencies, ships exactly what Minecraft loads — no build step to debug, no toolchain for the user to install. The right floor when the pack is small enough that a human can hold its file tree in their head. |
+| Need to manage multiple files, merge packs, or write Python plugins | **Beet** | Adds a build pipeline (file merging, output linking to a world, plugin hooks) without changing the language you write in. Pick this when project structure — not the commands themselves — is what's getting unwieldy. |
+| Need loops, variables, Python logic that generates commands | **Bolt** (requires Beet) | Real control flow at *author time*: `for`, `if`, function defs, f-strings expand into raw commands during build. Pick this when you'd otherwise be copy-pasting near-identical command lines or hand-unrolling loops. |
 
-When in doubt, ask the user. Bolt is the most powerful but requires Python + uv/pip. Raw mcfunction is zero-dependency.
+When in doubt, ask the user. The boundary cases — e.g. "three commands plus one small loop" or "two files but no real logic" — usually resolve by asking *which axis is the pain on*: file management → Beet, repetitive command generation → Bolt, neither → stay raw. Bolt is the most powerful but requires Python + uv/pip; raw mcfunction is zero-dependency.
+
+---
+
+## Scaffolding a new project
+
+Don't hand-emit boilerplate (`pack.mcmeta`, `beet.json`, function tags, load/tick stubs) — the skill bundles a script that does it from canonical templates in `assets/templates/`:
+
+```bash
+python scripts/scaffold_pack.py \
+  --name my-pack --namespace mypack \
+  --mc-version 1.21.4 [--with-bolt] [--out ./my-pack]
+```
+
+This writes the full tree (raw or Beet+Bolt depending on `--with-bolt`) with the correct `pack_format` for the version. Use it whenever the user is starting a new pack; spend your tokens on the *feature* they're asking for, not on retyping scaffolding. The templates themselves live in `assets/templates/` if you need to inspect or override pieces.
 
 ---
 
