@@ -233,14 +233,15 @@ execute store result storage mynamespace:db counter int 1 run scoreboard players
 
 For mid-scale design questions — minigames, multi-version packs, tracking systems, tick-heavy logic, role-based games, custom-item lifecycles, procedural structures, loot tables — read `references/datapack-patterns.md`. It distills idioms from popular community datapacks (Manhunt, BattleTowers, Vanilla-Refresh) organized by category:
 
-- State machines & global state, tick budgeting (including multi-speed scheduled clock loops), entity-selection algorithms
-- **Runtime configuration** (storage-based feature toggles, no-reload enable/disable)
-- Cross-version dispatch (including pack.mcmeta overlays for 1.21.4+), item identity & lifecycle, macros & storage, NBT↔scoreboard bidirectional sync
-- Dimension handling, game-state transitions (including advancement revocation triggers and trigger-based interactive menus), teams & roles, entity manipulation
+- State machines & global state, tick budgeting (including multi-speed scheduled clock loops), entity-selection algorithms (including locating just-mined blocks via fresh-item locator)
+- **Runtime configuration** (storage-based feature toggles, optional addon handshake via shared init score)
+- Cross-version dispatch (including pack.mcmeta overlays for 1.21.4+), item identity & lifecycle (including custom enchantments with `minecraft:tick` run_function effects), macros & storage (including stack-pop iteration over storage lists, dynamic per-key objectives, NBT↔scoreboard bidirectional sync)
+- **Vanilla event hooks** (statistic-criteria scoreboards as block/item event hooks)
+- Dimension handling, game-state transitions (advancement revocation triggers, trigger-based player menus, OP-side `tellraw` admin chat menus), teams & roles, entity manipulation
 - **Marker entities & block tracking** (pseudo-block state, per-block logic ownership)
-- **Raycasting** (recursive local-Z forward raycast with counter limit)
-- **Predicates & player input** (equipment slot checks, player jump/sneak/sprint detection — 1.21.3+)
-- Initialization (load vs first_load, per-player tick sub-function, first-join detection), naming conventions (math constants)
+- **Raycasting & spatial recursion** (recursive local-Z forward raycast, 6-neighbor 3D flood fill for vein-style propagation)
+- **Predicates & player input** (equipment slot checks, player jump/sneak/sprint detection — 1.21.3+, probability stacking via repeated predicate calls for Fortune-style multipliers)
+- Initialization (load vs first_load, per-player tick sub-function, first-join detection), naming conventions (math constants, public API + `internal/` directory layout)
 - **Structure worldgen** (Jigsaw pipeline, structure_set, template pools, additions pools)
 - **Processor lists** (block substitution, barrier-as-editor-marker removal)
 - **Loot tables** (vanilla table reuse, quality/luck scaling, nesting, location-conditional items, random_sequence, enchantment functions, mob drop tables, count distributions)

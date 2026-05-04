@@ -92,6 +92,32 @@ data modify storage mypack_config:config config.sitting set value 0
 
 **Source.** Vanilla-Refresh (`function/other/default_settings.mcfunction`, `function/tick.mcfunction`).
 
+### Optional addon handshake via shared init score
+
+**What it is.** Two separate datapacks can coordinate without a hard dependency by agreeing on a sentinel score in a shared objective. The addon writes the sentinel from **its own** `load`/`setup`; the main pack gates the integration code with `execute if score init <addon>.<flag> matches 1`. If the addon isn't installed, the score is never set and the main pack silently skips the integration — no errors, no warnings, no broken commands.
+
+**Snippet.**
+```mcfunction
+# main pack — load.mcfunction (creates the objective so the score-check is safe even without the addon)
+scoreboard objectives add init mypack.addons dummy
+
+# addon — load.mcfunction (runs only if the addon is installed)
+scoreboard objectives add init mypack.addons dummy
+scoreboard players set enchantment init mypack.addons 1
+say My Addon Loaded — requires the main pack.
+
+# main pack — runtime check, e.g. inside a per-action handler
+execute if score enchantment init mypack.addons matches 1 \
+        unless entity @s[nbt={SelectedItem:{components:{"minecraft:enchantments":{"myaddon:custom":1}}}}] \
+        run return fail
+```
+
+Both packs `scoreboard objectives add` the same objective — `add` is a no-op on existing objectives, so it's safe to declare in both. The addon is the only one that ever writes the sentinel.
+
+**When to reach for it.** Any feature you want to release as an optional add-on without rewriting the main pack's logic into "if X exists" branches everywhere. Also useful for soft-coupling between sibling packs in a modpack: pack A enables a UI panel only if pack B's progression objective exists.
+
+**Source.** Veinminer + Veinminer-Enchantment (`enchantment/data/veinminer-enchantment/function/setup.mcfunction` sets the sentinel; `veinminer/data/veinminer/function/internal/check/_mine.mcfunction` line 12 checks it).
+
 ---
 
 ## Tick budgeting
@@ -198,6 +224,28 @@ execute as @s[type=!player] run tag @s add classified_other
 **When to reach for it.** Any team or selector that might pick up tamed animals, allay companions, or other unintended entities. Also useful for "first time we've seen this player" hooks.
 
 **Source.** Manhunt (`handle_fake_runner.mcfunction` separates real runner players from tamed mobs on the runners team).
+
+### Locating the just-mined block via `@n[type=item, nbt={Age:0s}]`
+
+**What it is.** Block-break events expose the *player* but not the *block coordinate*. To recover the block position from a tick-based detector, look for the **freshly dropped item** in the direction the player is facing: `@n` (nearest) restricted to `type=item, nbt={Age:0s}` — `Age:0s` is true only on the tick the item spawned. Anchor to eye level and offset along local Z so the search ray starts in front of the player's face, where the dropped item appears.
+
+**Snippet.**
+```mcfunction
+# Called as the player when their mined-block stat objective ticks up
+execute as @s[scores={mypack.broke_diamond=1..}] \
+        anchored eyes positioned ^ ^ ^1.5 \
+        at @n[type=item, nbt={Age:0s}, distance=..5.0] \
+        run function mypack:on_diamond_break_at_block
+
+# inside on_diamond_break_at_block — ~ ~ ~ is now the block's coords
+execute if block ~ ~ ~ minecraft:diamond_ore run setblock ~ ~ ~ minecraft:emerald_block
+```
+
+**Caveats.** Fails silently if the break produces no item drop (silk-touch a block with no item form, instamining grass) — the `@n` selector finds nothing and the chain aborts. Also fails if a config like `mergeItemDrops` collapses drops onto a different position. The 1.5-block forward offset and 5-block search radius are tuned for first-person mining; adjust for tools with greater reach (creative mode, attribute modifiers).
+
+**When to reach for it.** Any "react at the block the player just broke" hook where you cannot install a marker beforehand. Combine with statistic-criteria objectives (vanilla event hooks section) to get both the *who* and the *where* from purely vanilla signals.
+
+**Source.** Veinminer (`function/internal/check/_loopi.mcfunction` line 4 — `anchored eyes positioned ^ ^ ^1.5 at @n[type=item,nbt={Age:0s},distance=..5.0]`).
 
 ---
 
@@ -308,6 +356,45 @@ execute as @e[type=item] if data entity @s Item.components."minecraft:custom_dat
 
 **Source.** Manhunt (`tick.mcfunction` line 7).
 
+### Custom enchantment with `minecraft:tick` run_function effect
+
+**What it is.** Since 1.21, datapacks can declare custom enchantments under `data/<ns>/enchantment/<id>.json`. The `effects.minecraft:tick` hook runs an effect every tick the item is in the configured slot — and one valid effect is `minecraft:run_function`, which calls a datapack function with the **wearer/holder as `@s`**. This is the cleanest way to attach datapack code to "while this enchanted item is held".
+
+**Snippet.** (`data/myaddon/enchantment/myenchant.json`)
+```json
+{
+  "description": { "translate": "enchantment.myenchant", "fallback": "My Enchant" },
+  "supported_items": "#minecraft:pickaxes",
+  "weight": 1,
+  "max_level": 1,
+  "min_cost": { "base": 15, "per_level_above_first": 0 },
+  "max_cost": { "base": 65, "per_level_above_first": 0 },
+  "anvil_cost": 7,
+  "slots": ["mainhand"],
+  "effects": {
+    "minecraft:tick": [
+      { "effect": { "type": "minecraft:run_function", "function": "myaddon:on_tick" } }
+    ]
+  }
+}
+```
+
+```mcfunction
+# myaddon:on_tick — runs as the player holding the enchanted item, every tick it's in mainhand
+scoreboard players set @s myaddon.active 1
+```
+
+**Detection from another pack.** The conventional NBT shape for "is the held item enchanted with X?" is:
+```mcfunction
+execute as @a[nbt={SelectedItem:{components:{"minecraft:enchantments":{"myaddon:myenchant":1}}}}] run ...
+```
+
+`SelectedItem` is the player's selected hotbar item; `components` is the post-1.20.5 component tree; the inner key uses the full namespaced enchantment ID.
+
+**When to reach for it.** Any "while-held" or "while-equipped" effect that should be visible in the enchanting table and combine with vanilla enchantments (Mending, Unbreaking, etc.). Pair with the **optional addon handshake** pattern to make the enchantment integration soft-fail when only the base pack is installed.
+
+**Source.** Veinminer-Enchantment (`enchantment/data/veinminer-enchantment/enchantment/veinminer.json` + `function/trigger.mcfunction`).
+
 ---
 
 ## Macros & storage
@@ -359,6 +446,63 @@ $item modify entity @s hotbar.1 mypack:compass_lodestone {X:$(X),Y:$(Y),Z:$(Z)}
 **When to reach for it.** When values change at runtime but the *shape* of the modification is fixed. Combines well with the macro+storage pattern above.
 
 **Source.** Manhunt (`item_modifiers/set_compass_nbt.json`).
+
+### Stack-pop iteration over a storage list
+
+**What it is.** Datapacks have no `for` loop, but you can iterate a list in storage by recursively popping the tail and feeding it as macro args to a per-element function. The classic shape is two files: `_loop.mcfunction` (pop + recurse) and `_loopi.mcfunction` (the macro body that consumes one element via `$(VAR)`).
+
+**Snippet.**
+```mcfunction
+# _loop.mcfunction — pop tail, dispatch, recurse if non-empty
+data modify storage mypack:data temp.current set from storage mypack:data temp.list[-1]
+data remove storage mypack:data temp.list[-1]
+
+function mypack:_loopi with storage mypack:data temp.current
+
+execute store result score #len mypack.scratch run data get storage mypack:data temp.list
+execute if score #len mypack.scratch matches 1.. run function mypack:_loop
+```
+
+```mcfunction
+# _loopi.mcfunction — every line is a macro consuming one popped element
+# Argument: namespace, id  (each list entry is {namespace:"...", id:"..."})
+$say Processing $(namespace):$(id)
+$execute if block ~ ~ ~ $(namespace):$(id) run function mypack:on_match
+```
+
+The caller seeds `temp.list` with `set from storage mypack:data blocks.pickaxe` before invoking `_loop`. Pop-from-tail (`[-1]`) beats `[0]` because removing the last index doesn't shift the rest of the list.
+
+**Nested-loop temp namespacing.** When loops nest (outer iterates blocks, inner iterates each block's neighbors, innermost renders config UI), give each level its own temp path: `temp0`, `temp1`, `temp2`. Sharing a single `temp` between nested loops corrupts the outer iterator the moment the inner one writes its `current`, since macros mutate storage in place and there is no call stack.
+
+**When to reach for it.** Iterating any runtime-built list whose length isn't known at authoring time — registered blocks, registered tools, online players by name, queued tasks. Faster and shorter than chained `execute if data storage` ladders, and the list can grow or shrink at runtime without rewriting the function.
+
+**Source.** Veinminer (`function/internal/check/_loop.mcfunction` + `_loopi.mcfunction`; same shape repeated for `mine/_loop`, `config/_loop` — three nested loops on `temp0`/`temp1`/`temp2`).
+
+### Dynamic per-key objectives via macros
+
+**What it is.** Build scoreboard objectives whose **names encode runtime data** by creating them inside a macro function. Combine with a statistic criterion (`minecraft.mined:<ns>:<id>`) and you get a free "did this player just break X?" hook for any block the user registers at runtime — no global polling, no advancement file per block.
+
+**Snippet.**
+```mcfunction
+# block_add.mcfunction — every line is a macro
+# Argument: namespace, id, category
+$data modify storage mypack:data blocks.$(category) append value {namespace:"$(namespace)", id:"$(id)"}
+$scoreboard objectives add mypack.b.$(namespace).$(id) minecraft.mined:$(namespace).$(id)
+$scoreboard players reset @a mypack.b.$(namespace).$(id)
+```
+
+```mcfunction
+# detect.mcfunction (called per registered block via the stack-pop pattern above)
+# Argument: namespace, id
+$execute as @a[scores={mypack.b.$(namespace).$(id)=1..}] at @s run function mypack:on_break with storage mypack:data temp.current
+$scoreboard players reset @a mypack.b.$(namespace).$(id)
+```
+
+Naming convention: `<pack>.<role>.<namespace>.<id>` with single-letter roles (`b.` for block-mined, `t.` for tool-used) keeps the objective namespace organized and avoids collisions with other packs.
+
+**When to reach for it.** Plugin-style packs where users register their own blocks, items, or tools at runtime via a config command. Create the objective on add, reset it on remove, never enumerate the vanilla block list at load time.
+
+**Source.** Veinminer (`function/block_add.mcfunction`, `function/tool_add.mcfunction`, `function/internal/check/_loopi.mcfunction`).
 
 ### NBT ↔ Scoreboard bidirectional sync
 
@@ -541,6 +685,59 @@ Available input keys: `forward`, `backward`, `left`, `right`, `jump`, `sneak`, `
 
 **Source.** Vanilla-Refresh (`data/vanilla_refresh/predicate/input/jump.json`).
 
+### Probability stacking via repeated predicate calls
+
+**What it is.** Datapacks can't sample from a weighted distribution directly, but they can model **expected-value multipliers** like vanilla Fortune by calling a `random_chance` predicate **multiple times in series**. Each surviving call duplicates whatever effect follows. Calling a 50%-chance predicate twice gives a distribution of {0 with p=0.25, 1 with p=0.5, 2 with p=0.25} — same shape as a binomial(2, 0.5).
+
+**Snippet.** (`predicate/fortune2.json`)
+```json
+{ "condition": "minecraft:random_chance", "chance": 0.375 }
+```
+
+```mcfunction
+# enchantments.mcfunction — fortune-N triggers up to N independent rolls
+execute if score @s mypack.fortune matches 1 if predicate mypack:fortune1 run function mypack:duplicate_drop
+execute if score @s mypack.fortune matches 2 if predicate mypack:fortune2 run function mypack:duplicate_drop
+execute if score @s mypack.fortune matches 2 if predicate mypack:fortune2 run function mypack:duplicate_drop
+execute if score @s mypack.fortune matches 3 if predicate mypack:fortune3 run function mypack:duplicate_drop
+execute if score @s mypack.fortune matches 3 if predicate mypack:fortune3 run function mypack:duplicate_drop
+execute if score @s mypack.fortune matches 3 if predicate mypack:fortune3 run function mypack:duplicate_drop
+```
+
+The two `fortune2` lines are **intentional duplicates** — each is an independent roll, and together they reproduce the binomial(2, 0.375) distribution that vanilla Fortune II uses. Tune the per-predicate `chance` value so the cumulative expected count matches the vanilla formula you're emulating.
+
+**When to reach for it.** Emulating Fortune, Looting, or any vanilla loot multiplier from datapack code (e.g., a custom mining mode that breaks blocks via `setblock destroy` and so doesn't get the engine's loot bonuses for free). Also useful for "extra try" mechanics where the per-attempt success rate is independent.
+
+**Source.** Veinminer (`function/internal/mine/enchantments.mcfunction` + `predicate/fortune{1,2,3}.json`).
+
+---
+
+## Vanilla event hooks via statistic objectives
+
+### Statistic-criteria scoreboards as block/item event hooks
+
+**What it is.** Most scoreboard objectives use the `dummy` criterion, but the engine also offers **statistic criteria** — `minecraft.mined:<ns>:<id>`, `minecraft.used:<ns>:<id>`, `minecraft.killed:<ns>:<id>`, `minecraft.crafted:<ns>:<id>`, etc. — that auto-increment the player's score whenever the matching event fires. A tick-based detector reads `score @s X matches 1..`, runs the handler, then resets the score. This is the cheapest way to react to a discrete in-world event from datapack code.
+
+**Snippet.**
+```mcfunction
+# load.mcfunction
+scoreboard objectives add mypack.broke_diamond minecraft.mined:minecraft.diamond_ore
+scoreboard objectives add mypack.used_compass minecraft.used:minecraft.compass
+
+# tick.mcfunction
+execute as @a[scores={mypack.broke_diamond=1..}] at @s run function mypack:on_diamond_break
+scoreboard players reset @a mypack.broke_diamond
+
+execute as @a[scores={mypack.used_compass=1..}] at @s run function mypack:on_compass_use
+scoreboard players reset @a mypack.used_compass
+```
+
+The reset is critical — without it the score stays ≥1 and your handler fires every tick forever after the first event.
+
+**When to reach for it.** Any "when the player does X" hook where X is a vanilla statistic event. Lighter than an advancement file per event (no JSON, no revocation step, no resource cost on join) and cheaper than polling NBT or inventory state. Pair with **dynamic per-key objectives via macros** (above) for runtime-registered targets.
+
+**Source.** Veinminer (`function/internal/check/_loopi.mcfunction` uses `veinminer.t.<ns>.<id>` for tool-use detection, `function/block_add.mcfunction` registers `veinminer.b.<ns>.<id>` for block-mine detection).
+
 ---
 
 ## Game-state transitions
@@ -631,6 +828,49 @@ tellraw @s [
 **When to reach for it.** Any in-game UI that needs player interaction: stats screens, settings panels, confirmation dialogs, help menus. The `trigger` objective only fires when the player explicitly sets it — it can't be set by commands except `scoreboard players enable`, so it's safe from unintended activation. Always reset to 0 after handling so the menu can be re-opened.
 
 **Source.** Vanilla-Refresh (`function/load.mcfunction` trigger objective setup, `function/selector_all_players.mcfunction` enable+branch pattern, `function/other_features/gamerules/`).
+
+### Admin chat menu via `tellraw` + `run_command` / `suggest_command`
+
+**What it is.** The OP-side counterpart to `/trigger` menus. Instead of routing through a trigger objective, build a settings/admin menu where each `tellraw` line carries `click_event:{action:"run_command", command:"/function ..."}` (instant invocation) or `action:"suggest_command"` (pre-fills the chat box so the admin can edit arguments before pressing Enter). Requires OP/cheats — there is no permission gate beyond that, which is why this is for admins, not players.
+
+**Snippet.**
+```mcfunction
+# _config.mcfunction — root admin menu
+tellraw @s [{"text":"\n>> ","color":"dark_gray"}, {"text":"My Pack Settings","color":"green"}]
+
+# Toggle row — render the active state in bold and unclickable, the inactive state as the click target
+execute if score sneak mypack.settings matches 1.. run tellraw @s [\
+    {"text":" -> Sneaking Required - ","color":"gray"},\
+    {"text":"[ON]","bold":true,"color":"green"},\
+    {"text":"/","color":"gray"},\
+    {"text":"[OFF]","color":"red","click_event":{"action":"run_command","command":"/scoreboard players set sneak mypack.settings 0"}}\
+]
+execute if score sneak mypack.settings matches ..0 run tellraw @s [\
+    {"text":" -> Sneaking Required - ","color":"gray"},\
+    {"text":"[ON]","color":"green","click_event":{"action":"run_command","command":"/scoreboard players set sneak mypack.settings 1"}},\
+    {"text":"/","color":"gray"},\
+    {"text":"[OFF]","bold":true,"color":"red"}\
+]
+
+# "Edit value" row — suggest_command pre-fills, leaving the trailing space for the new value
+tellraw @s [{"text":" -> Cooldown - ","color":"gray"},\
+    {"score":{"name":"default","objective":"mypack.cooldown"},"color":"yellow"},\
+    {"text":" (change)","color":"gray","click_event":{"action":"suggest_command","command":"/scoreboard players set default mypack.cooldown "}}\
+]
+
+# Subcommand link with macro args — useful for "edit blocks in category X" navigation
+tellraw @s [{"text":" -> Pickaxe Blocks","color":"gray",\
+    "click_event":{"action":"run_command","command":"/function mypack:block_edit {category:\"pickaxe\"}"},\
+    "hover_event":{"action":"show_text","value":{"text":"Click to inspect or edit pickaxe blocks","color":"yellow"}}}]
+
+# Item-display row — show_item lets the admin see the actual item icon on hover
+tellraw @s [{"text":" 1. minecraft:diamond_ore","color":"gray",\
+    "hover_event":{"action":"show_item","id":"minecraft:diamond_ore"}}]
+```
+
+**When to reach for it.** Any admin/OP configuration UI that needs to invoke commands directly (`run_command`) or pre-fill arguments for editing (`suggest_command`) — settings panels, debug menus, list-with-remove-button rows, "navigate to subcategory" links. Combine with macros: a single `display_entry.mcfunction` rendered per list item via the stack-pop iteration pattern produces a fully dynamic CRUD menu without writing one tellraw per row.
+
+**Source.** Veinminer (`function/_config.mcfunction` for the toggle/value-edit/subcommand idioms; `function/internal/config/display_entry.mcfunction` for the dynamic per-item row with `[-]` remove button).
 
 ### Idempotent end-state functions
 
@@ -771,7 +1011,7 @@ Use `align xyz positioned ~.5 ~.5 ~.5` to snap to block center before summoning 
 
 ---
 
-## Raycasting
+## Raycasting & spatial recursion
 
 ### Recursive local-Z forward raycast
 
@@ -804,6 +1044,39 @@ Step size vs. iteration tradeoff: 0.05 blocks × 100 iterations = 5 block range 
 **When to reach for it.** Block detection in the direction a player is looking: "activate the lodestone you're aimed at", "shoot an invisible arrow", "find the first solid block ahead". For simpler "is there a block within N blocks straight ahead" checks, a single `execute if block ^ ^ ^N` may suffice — reach for full recursion only when you need the *closest* hit or per-step effects (particle trails).
 
 **Source.** Vanilla-Refresh (`function/block/lodestone/raycast.mcfunction` — 0.05 step, 100-iteration limit, lodestone detection).
+
+### 6-neighbor 3D flood fill
+
+**What it is.** Vein-mining, connected-component lighting, "all blocks of type X touching this one" — these are flood fills over the 6 axis-aligned block neighbors. The shape is two functions: a **try** function that runs at a candidate coordinate and bails if the block doesn't match, plus a **spread** function that calls `execute positioned ~+1 ~ ~`, `~-1 ~ ~`, `~ ~+1 ~`, `~ ~-1 ~`, `~ ~ ~+1`, `~ ~ ~-1` into `try`. The `try` function recurses back into spread on a match, naturally bounded by the size of the connected region. No depth counter needed — the "did we already process this block?" termination is implicit because once we mine/replace the block, the match condition fails on revisit.
+
+**Snippet.**
+```mcfunction
+# try.mcfunction — runs at one candidate coordinate
+# Argument: namespace, id (the target block we're flood-filling)
+$execute if block ~ ~ ~ $(namespace):$(id) run function mypack:flood/visit with storage mypack:data current
+
+# visit.mcfunction — we matched: do the work, then spread to 6 neighbors
+# (work: mine the block, light it, paint it, whatever)
+setblock ~ ~ ~ minecraft:air destroy
+
+function mypack:flood/spread
+
+# spread.mcfunction — recurse into each of the 6 axis neighbors
+execute positioned ~1 ~ ~ run function mypack:flood/try with storage mypack:data current
+execute positioned ~-1 ~ ~ run function mypack:flood/try with storage mypack:data current
+execute positioned ~ ~1 ~ run function mypack:flood/try with storage mypack:data current
+execute positioned ~ ~-1 ~ run function mypack:flood/try with storage mypack:data current
+execute positioned ~ ~ ~1 run function mypack:flood/try with storage mypack:data current
+execute positioned ~ ~ ~-1 run function mypack:flood/try with storage mypack:data current
+```
+
+**Performance.** A solid N-block vein triggers ~6N `try` calls (each block dispatches to its 6 neighbors). A 100-block vein is ~600 function calls — well within the per-tick command budget but worth a hard cap (`maxCommandChainLength` is 65536 by default). For very large fills, gate the entire chain behind a per-player cooldown so a player can't spam-trigger overlapping floods.
+
+**Two-stage variant** (`check_aligning` → `try` → `mine` → `check_aligning`): when each "visit" needs to validate something extra (the player is sneaking, holding the right tool, has stamina) before recursing, split `visit` into a guard step and an action step. The guard runs the predicate; on success it calls the action; the action mutates the world and *then* calls back into `spread`. This keeps the recursion clean and the predicate evaluation in one place.
+
+**When to reach for it.** Any "spread to all touching blocks of the same type" mechanic: vein mining, tree felling, bulk crop harvesting, fluid-source detection, pressure-plate cascades. The forward-Z raycast above answers "what am I looking at?"; this answers "everything connected to here."
+
+**Source.** Veinminer (`function/internal/mine/check_aligning.mcfunction` does the 6-neighbor dispatch; `try.mcfunction` is the per-cell guard; `mine.mcfunction` mines the block and recurses back into `check_aligning`).
 
 ---
 
@@ -945,6 +1218,40 @@ execute store result entity @e[tag=proj,limit=1] power[0] double 0.001 \
 **When to reach for it.** Any time you do repeated integer division or multiplication: tick→second conversion, fixed-point position math (store position × 1000 for precision, divide back for display), percentage calculations. Putting the constants in a named objective makes the intent obvious to future readers — `/ 60 mypack_constants` reads as "divide by 60" rather than a cryptic fake-player reference.
 
 **Source.** Vanilla-Refresh (`function/load.mcfunction` lines 220–261 — `refresh_constants` objective with 1, 2, 3, … 20, 60, 100, 1000 pre-set).
+
+### Public API top level + `internal/` subdirectory
+
+**What it is.** Mirror the `#`-fake-player ("private score") convention at the function-folder level: the **top level** of `data/<ns>/function/` is the **public API** that admins, other packs, or `tellraw` click events are expected to invoke. Everything else — recursion bodies, loop iterators, dispatch tables, per-step helpers — lives under `function/internal/<feature>/`. An underscore prefix (`_config`, `_reset`, `_enable`, `_disable`) marks "user-facing but reserved/utility" — you can call them but they're not the routine entry points.
+
+**Layout.**
+```
+data/mypack/function/
+├── block_add.mcfunction          ← public: /function mypack:block_add {...}
+├── block_edit.mcfunction         ← public
+├── tool_add.mcfunction           ← public
+├── _config.mcfunction            ← admin entry point: opens settings menu
+├── _reset.mcfunction             ← admin entry point: restore defaults
+├── _enable.mcfunction
+├── _disable.mcfunction
+└── internal/
+    ├── setup.mcfunction          ← called from load tag — implementation
+    ├── tick.mcfunction           ← called from tick tag — implementation
+    ├── check/
+    │   ├── _general.mcfunction
+    │   ├── _loop.mcfunction
+    │   └── _loopi.mcfunction
+    ├── mine/
+    │   ├── mine.mcfunction
+    │   └── try.mcfunction
+    └── config/
+        └── display_entry.mcfunction
+```
+
+**Why it works.** Anyone reading the namespace via `/function mypack:` tab-completion sees only the supported entry points — `internal/` is one keystroke away but visually separated. Refactoring the internal recursion shape doesn't break callers, since callers only know the public names. The `_`-prefix on admin-only commands keeps them visually distinct from the data-mutation commands users hit most often (`block_add`, `tool_add`).
+
+**When to reach for it.** Any pack large enough to have implementation helpers (anything past the "single tick.mcfunction" stage). The discipline pays off the first time you rename a helper and want to be sure no external caller depends on the old name — if it lived under `internal/`, by convention nothing did.
+
+**Source.** Veinminer (`data/veinminer/function/` directory layout — public CRUD commands at the top, all recursion and dispatch under `internal/check/`, `internal/mine/`, `internal/config/`).
 
 ---
 
