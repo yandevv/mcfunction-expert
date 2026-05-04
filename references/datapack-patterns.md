@@ -1,5 +1,31 @@
 # Datapack architecture patterns
 
+## Table of contents
+
+1. [State machines & global state](#state-machines--global-state)
+2. [Runtime configuration](#runtime-configuration)
+3. [Tick budgeting](#tick-budgeting)
+4. [Entity selection algorithms](#entity-selection-algorithms)
+5. [Cross-version compatibility](#cross-version-compatibility)
+6. [Item identity & lifecycle](#item-identity--lifecycle)
+7. [Macros & storage](#macros--storage)
+8. [Dimension handling](#dimension-handling)
+9. [Predicates & player input](#predicates--player-input)
+10. [Vanilla event hooks via statistic objectives](#vanilla-event-hooks-via-statistic-objectives)
+11. [Game-state transitions](#game-state-transitions)
+12. [Teams & roles](#teams--roles)
+13. [Entity manipulation](#entity-manipulation)
+14. [Marker entities & block tracking](#marker-entities--block-tracking)
+15. [Raycasting & spatial recursion](#raycasting--spatial-recursion)
+16. [Initialization](#initialization)
+17. [Naming conventions](#naming-conventions)
+18. [Worldgen — biomes, terrain, dimension](#worldgen--biomes-terrain-dimension)
+19. [Structure worldgen (Jigsaw)](#structure-worldgen-jigsaw)
+20. [Processor lists](#processor-lists)
+21. [Loot tables](#loot-tables)
+
+---
+
 Distilled idioms from real, popular community datapacks. Reach for this file when the user is designing **mid-scale logic** — a minigame, a tracking system, a multi-version pack, a tick-heavy mechanic — not when answering a one-line command question.
 
 Each entry is structured as: **what it is**, **snippet**, **when to reach for it**, **source**.
