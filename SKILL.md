@@ -242,7 +242,8 @@ For mid-scale design questions — minigames, multi-version packs, tracking syst
 - **Raycasting & spatial recursion** (recursive local-Z forward raycast, 6-neighbor 3D flood fill for vein-style propagation)
 - **Predicates & player input** (equipment slot checks, player jump/sneak/sprint detection — 1.21.3+, probability stacking via repeated predicate calls for Fortune-style multipliers)
 - Initialization (load vs first_load, per-player tick sub-function, first-join detection), naming conventions (math constants, public API + `internal/` directory layout)
-- **Structure worldgen** (Jigsaw pipeline, structure_set, template pools, additions pools)
+- **Worldgen terrain & biomes** (custom biome anatomy with positional features-by-step array, configured/placed feature split, noise parameter files, density function composition with `cache_once`/`min`/`max`/`range_choice`, `multi_noise` 6-axis dimension dispatch, tag-based `has_structure` decoupling, hierarchical folder conventions for large packs)
+- **Structure worldgen** (Jigsaw pipeline, structure_set, template pools, additions pools, `terrain_adaptation` modes)
 - **Processor lists** (block substitution, barrier-as-editor-marker removal)
 - **Loot tables** (vanilla table reuse, quality/luck scaling, nesting, location-conditional items, random_sequence, enchantment functions, mob drop tables, count distributions)
 

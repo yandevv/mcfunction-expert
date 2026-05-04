@@ -1255,6 +1255,298 @@ data/mypack/function/
 
 ---
 
+## Worldgen — biomes, terrain, dimension
+
+Custom worldgen is layered: the dimension picks biomes from a parameter space, biomes list features and carvers, features split into "what to place" and "where to place it", and the terrain shape itself comes from a graph of density functions sampling noise. Each layer is a separate JSON resource and they reference each other by namespaced ID — not by inlining.
+
+The patterns below are distilled from Terralith (a 1,700-file overworld overhaul). Concrete file paths are given so you can open the source.
+
+### The worldgen pipeline overview
+
+```
+worldgen/dimension/<name>.json
+    └─ biome_source: multi_noise               ← maps 6-axis param space → biome IDs
+       └─ worldgen/biome/<name>.json
+          ├─ carvers: [configured_carver IDs]
+          └─ features: [[step0...], [step1...], ..., [step10]]
+             └─ worldgen/placed_feature/<name>.json   ← rarity, height, biome filter
+                └─ feature: worldgen/configured_feature/<name>.json   ← what block(s)
+                   └─ may sample worldgen/noise/<name>.json
+worldgen/noise_settings/<name>.json
+    └─ density graph: composes worldgen/density_function/<name>.json
+       └─ leaves sample worldgen/noise/<name>.json
+```
+
+The split between *configured* and *placed* features, and between *noise* (parameters) and *density_function* (graph), is the same idea twice: separate **what** from **where/how often**.
+
+### Custom biome definition
+
+**What it is.** A `worldgen/biome/<name>.json` describes climate, visuals, mob spawns, carvers, and the features that decorate the biome.
+
+**Anatomy** (see `Terralith/data/terralith/worldgen/biome/tropical_jungle.json`):
+
+```json
+{
+  "has_precipitation": true,
+  "temperature": 0.95,
+  "downfall": 0.9,
+  "effects": {
+    "fog_color": 12638463, "sky_color": 9619199,
+    "water_color": 4445678, "water_fog_color": 329011,
+    "foliage_color": 11856974, "grass_color": 9035086,
+    "mood_sound": { "sound": "minecraft:ambient.cave",
+                    "tick_delay": 6000, "block_search_extent": 8, "offset": 2 },
+    "music": { "sound": "minecraft:music.overworld.jungle",
+               "min_delay": 12000, "max_delay": 24000,
+               "replace_current_music": false }
+  },
+  "carvers": { "air": ["minecraft:cave", "minecraft:canyon"] },
+  "features": [
+    [],                                        // step 0  raw_generation
+    ["minecraft:lake_lava_underground"],       // step 1  lakes
+    ["minecraft:amethyst_geode"],              // step 2  local_modifications
+    ["minecraft:monster_room"],                // step 3  underground_structures
+    [], [],                                    // 4 surface_structures, 5 strongholds
+    ["minecraft:ore_iron_upper", "..."],       // step 6  underground_ores
+    [],                                        // step 7  underground_decoration
+    ["minecraft:spring_water"],                // step 8  fluid_springs
+    ["minecraft:patch_grass_jungle", "..."],   // step 9  vegetal_decoration
+    ["minecraft:freeze_top_layer"]             // step 10 top_layer_modification
+  ],
+  "spawners": { "creature": [{ "type": "minecraft:parrot",
+                               "weight": 40, "minCount": 1, "maxCount": 2 }],
+                "monster": [...], "ambient": [...], "axolotls": [],
+                "underground_water_creature": [...], "water_ambient": [],
+                "water_creature": [], "misc": [] },
+  "spawn_costs": {}
+}
+```
+
+**Why the `features` array is positional.** It's a fixed list of 11 *generation steps* (raw_generation → top_layer_modification). Each inner array is "the placed_features that run at this step in this biome". An empty array means "nothing custom at this step". You cannot reorder; the engine matches by index. This is why you'll see lots of `[]` placeholders in real biomes.
+
+**Spawners object must include all 8 categories** (`monster`, `creature`, `ambient`, `axolotls`, `underground_water_creature`, `water_ambient`, `water_creature`, `misc`) even if empty — the loader rejects partial objects.
+
+### Configured feature vs placed feature
+
+**Configured = what to place. Placed = where and how often.** Two files for one feature, by design — the same configured_feature can be reused at different rarities/heights in different biomes.
+
+**Configured feature** (`Terralith/data/terralith/worldgen/configured_feature/alpha/clay_patch.json`):
+
+```json
+{
+  "type": "minecraft:ore",
+  "config": {
+    "size": 50,
+    "discard_chance_on_air_exposure": 0,
+    "targets": [
+      { "target": { "predicate_type": "minecraft:block_match",
+                    "block": "minecraft:sand" },
+        "state":  { "Name": "minecraft:clay" } }
+    ]
+  }
+}
+```
+
+**Placed feature** that wraps it (`Terralith/data/terralith/worldgen/placed_feature/alpha/clay_patch.json`):
+
+```json
+{
+  "feature": "terralith:alpha/clay_patch",
+  "placement": [
+    { "type": "minecraft:rarity_filter", "chance": 3 },
+    { "type": "minecraft:in_square" },
+    { "type": "minecraft:height_range",
+      "height": { "type": "minecraft:uniform",
+                  "min_inclusive": { "absolute": 57 },
+                  "max_inclusive": { "absolute": 62 } } },
+    { "type": "minecraft:biome" }
+  ]
+}
+```
+
+**The placement list is a pipeline of decorators**, evaluated in order on each candidate position:
+- `rarity_filter` — keeps 1 in N attempts
+- `in_square` — randomizes XZ within the chunk
+- `height_range` — clamps Y; pair with `heightmap` for surface-relative
+- `biome` — drops the placement if the final position isn't actually inside the biome that requested it (essential when biomes have irregular borders — without it, features bleed across)
+
+Biomes only ever reference *placed* features in their `features` array. Configured features are never referenced from biomes directly.
+
+### Noise parameter files
+
+`worldgen/noise/<name>.json` is just a normalized noise generator: a starting octave plus per-octave amplitudes. It's the leaf input to density functions and to climate noise.
+
+Example (`Terralith/data/terralith/worldgen/noise/...`):
+
+```json
+{ "firstOctave": -2, "amplitudes": [1.25, 0.75] }
+```
+
+These files are tiny but are what give terrain its "feel". Density functions reference them by ID via `{ "type": "minecraft:noise", "noise": "<id>", "xz_scale": 1.0, "y_scale": 0.0 }`.
+
+### Density functions as composable terrain
+
+The shape of the world is a graph. Each node is a density function — either a leaf (a `minecraft:noise` sample, a constant, a y-gradient) or a combinator (`add`, `mul`, `min`, `max`, `range_choice`, `cache_once`, `flat_cache`, `cache_2d`, `clamp`, `abs`, `square`, `cube`, `interpolated`, `blend_density`, `shifted_noise`, ...). Each density function is its own JSON file referenced by namespaced ID.
+
+**Example — a single terrain layer** (`Terralith/data/terralith/worldgen/density_function/overworld/cliff/carve.json`):
+
+```json
+{
+  "type": "minecraft:cache_once",
+  "argument": {
+    "type": "minecraft:add",
+    "argument1": "terralith:overworld/cliff/spline",
+    "argument2": {
+      "type": "minecraft:max",
+      "argument1": {
+        "type": "minecraft:add",
+        "argument1": -1.65,
+        "argument2": {
+          "type": "minecraft:flat_cache",
+          "argument": {
+            "type": "minecraft:cache_2d",
+            "argument": {
+              "type": "minecraft:noise",
+              "noise": "terralith:math/cliff/max_cut",
+              "xz_scale": 1.0, "y_scale": 0.0
+            }
+          }
+        }
+      },
+      "argument2": {
+        "type": "minecraft:range_choice",
+        "input": "terralith:overworld/cliff/spline",
+        "min_inclusive": -1000000, "max_exclusive": 2.0,
+        "when_in_range": { "...": "..." },
+        "when_out_of_range": 64
+      }
+    }
+  }
+}
+```
+
+**Operator vocabulary used in practice:**
+
+| Operator | Use |
+|---|---|
+| `cache_once` | Memoize an expensive subtree per sample point. Wrap any non-trivial subtree the parent reads more than once. |
+| `cache_2d` / `flat_cache` | Cache results that don't depend on Y. Pair with `cache_2d` for noise sampled per-column. |
+| `min` / `max` | Blend or layer two terrain effects. `max` of a base and a layer = "raise terrain wherever the layer is positive". |
+| `range_choice` | Branch: if `input ∈ [min, max)` use `when_in_range`, else `when_out_of_range`. Used for "this carve only applies inside that band". |
+| `add` / `mul` (`multiply`) | Standard combinators; numeric literals work in place of nodes (e.g. `"argument1": -1.65`). |
+| `noise` | Sample a `worldgen/noise/<name>.json` with `xz_scale` and `y_scale`. `y_scale: 0` means 2D. |
+| `y_clamped_gradient` | A linear ramp in Y between two altitudes — handy for "stronger near sea level, fades at depth". |
+
+**Why `cache_once` matters.** Density functions are sampled at every grid point during chunk gen — millions of times per chunk. Without caching, a subtree referenced from two parents is evaluated twice. Real packs wrap *every* shared subtree in `cache_once` and put their per-column work in `cache_2d` + `flat_cache`. Skipping this is the single biggest perf footgun.
+
+**Hierarchical folder convention.** Each terrain feature family gets its own subfolder with a small set of stock filenames:
+
+```
+density_function/overworld/cliff/
+    carve.json          ← the final exported function for this layer
+    carve_depth.json
+    cliff_depth.json
+    max_cut.json
+    modified_continents.json
+    modified_offset.json
+    slope.json
+    spline.json
+    disabled.json       ← a no-op alternative for toggling the layer off
+```
+
+The whole pack composes its terrain by `max`-ing these layers (cliff, arch, dune, spike, ...) into a single sum function. Adding a new terrain feature = adding a folder + a single `max` term in the sum. This is the difference between a maintainable worldgen pack and one that becomes unreadable past ~20 files.
+
+### Dimension definition with `multi_noise`
+
+A dimension's biome source is a list of `(biome, parameter-region)` entries. Each entry says "if the 6 climate noises fall inside this 6D box, use this biome". Adjacent entries' boxes can touch but should not overlap, or two biomes will fight for the same point and one wins arbitrarily.
+
+```json
+{
+  "type": "minecraft:overworld",
+  "generator": {
+    "type": "minecraft:noise",
+    "biome_source": {
+      "type": "minecraft:multi_noise",
+      "biomes": [
+        {
+          "biome": "minecraft:deep_frozen_ocean",
+          "parameters": {
+            "temperature":     [-1.005, -0.45],
+            "humidity":        [-1, 1],
+            "continentalness": [-1.2, -0.455],
+            "erosion":         [-1, -0.78],
+            "depth":           [-0.005, 0],
+            "weirdness":       [-1, 1],
+            "offset":          0
+          }
+        }
+        // ...
+      ]
+    },
+    "settings": "minecraft:overworld"
+  }
+}
+```
+
+**The six axes** (`temperature`, `humidity`, `continentalness`, `erosion`, `depth`, `weirdness`) are each a noise sampled independently. `offset` is a constant added to the squared-distance score when ties happen — lower offset wins, so it's effectively a "priority break" between equally-matching biomes.
+
+**Single-source-of-truth pattern.** Terralith's `data/minecraft/dimension/overworld.json` is **51,000+ lines**. It enumerates *every* biome (vanilla and custom) that can appear, with full parameter regions for each. This is intentional: vanilla's biome source is opinionated, so to insert custom biomes cleanly you ship one giant file that owns the entire dispatch. A small pack adding two biomes still needs to re-list all the vanilla regions it cares about — there's no "patch" mechanism for `multi_noise`.
+
+### Tag-based `has_structure` dispatch
+
+Structure JSONs already have a `biomes` field (see the Structure worldgen section below). Putting a flat list there means every time you add a biome to your pack you have to edit every structure that should spawn in it. Terralith uses tags instead:
+
+```json
+// Terralith/data/terralith/worldgen/structure/desert_outpost.json
+{
+  "type": "minecraft:jigsaw",
+  "biomes": "#terralith:has_structure/desert_outpost",
+  "start_pool": "terralith:regular/desert_outpost",
+  "step": "surface_structures",
+  "terrain_adaptation": "beard_thin"
+}
+```
+
+```json
+// Terralith/data/minecraft/tags/worldgen/biome/has_structure/igloo.json
+{ "replace": false, "values": ["terralith:wintry_forest", "terralith:snowy_badlands"] }
+```
+
+Adding a new winter biome to the pack now means appending one entry to the tag — never touching the structure JSON. `"replace": false` is critical: it merges with vanilla's tag instead of clobbering it, so vanilla igloos still spawn in vanilla snowy biomes.
+
+**This is a worldgen instance of the standard "data-driven dispatch via tags" idiom** — same shape as function tags hooking into `#minecraft:tick`, just applied to biomes.
+
+### Folder hierarchy at scale
+
+With 1,700+ JSON files, flat folders break down. Terralith's convention is:
+
+```
+worldgen/<resource_type>/<theme_or_family>/<asset>.json
+```
+
+Examples:
+- `worldgen/biome/tropical_jungle.json` (theme is the biome name itself; biomes don't subfolder)
+- `worldgen/configured_feature/alpha/clay_patch.json` (theme = a biome family "alpha")
+- `worldgen/placed_feature/alpha/clay_patch.json` (mirrors configured)
+- `worldgen/density_function/overworld/cliff/carve.json` (resource type = density_function, family = "cliff" terrain layer)
+- `worldgen/structure/regular/desert_outpost.json` (family = "regular" structure tier)
+- `worldgen/template_pool/mage/tower_start.json` (family = "mage" structure)
+
+**The rule is: folder hierarchy should mirror the namespaced-ID hierarchy**, so that given an ID like `terralith:overworld/cliff/carve` you can predict the file path without grepping. This pays off enormously when reading another file that references a function by ID — you can open it instantly.
+
+Configured and placed features should use **identical paths** under their respective folders, so a configured feature at `configured_feature/alpha/clay_patch.json` has its placed wrapper at `placed_feature/alpha/clay_patch.json`. This convention is what makes large feature sets navigable.
+
+### `terrain_adaptation` on jigsaw structures
+
+Cross-reference for the Structure worldgen section below: jigsaw structures take a `terrain_adaptation` field that controls how surrounding terrain is reshaped to fit the structure. Terralith uses two values:
+
+- `"none"` — leave terrain alone; structure can clip into hills.
+- `"beard_thin"` — push terrain down under the structure with a thin "beard" of supporting blocks. Use this for surface buildings (towers, outposts) that need to sit cleanly on uneven ground without a giant flat platform.
+
+Other valid values include `"beard_box"` (heavier; for large dungeons), `"bury"` (force underground), `"encapsulate"` (carve a void around it). Pick based on whether the structure should adapt to or override the landscape.
+
+---
+
 ## Structure worldgen (Jigsaw)
 
 Custom structures are built from five layers of JSON files plus binary `.nbt` structure templates. Each layer has a distinct role — getting one wrong breaks the whole pipeline silently.
