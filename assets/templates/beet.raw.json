@@ -1,7 +1,6 @@
 {
   "name": "{{NAME}}",
   "description": "{{DESCRIPTION}}",
-  "minecraft": "{{MC_VERSION}}",
   "output": "build",
   "data_pack": {
     "load": ["src"]

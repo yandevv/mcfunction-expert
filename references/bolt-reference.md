@@ -12,24 +12,36 @@ Repo: https://github.com/mcbeet/beet (bolt lives in `packages/bolt/`)
 ```json
 {
   "name": "my-pack",
-  "minecraft": "1.21.4",
   "output": "build",
   "require": ["bolt"],
-  "pipeline": ["bolt"],
+  "pipeline": ["bolt", "mecha"],
   "data_pack": {
     "load": ["src"]
   }
 }
 ```
 
-### File placement
+`bolt` registers parser extensions for Python-like syntax; `mecha` runs the actual compile step (`mc.compile(...)`) that emits `.mcfunction`. **If `mecha` is omitted from the pipeline, the build succeeds with no warning but the output `.mcfunction` files still contain raw Python source** — loops are not unrolled, f-strings are not interpolated. Both must be present.
 
-`.bolt` files go in the same location as `.mcfunction` files:
-```
-src/data/mynamespace/function/main.bolt
-```
+The `"minecraft"` field is intentionally absent here. When it is set, beet auto-generates a `pack.mcmeta` on every build that overwrites any hand-written one in `src/`. Either let beet manage the metadata (set `"minecraft"`, do not write your own `pack.mcmeta`) or manage `pack.mcmeta` yourself (omit `"minecraft"`, place the file at `src/pack.mcmeta`). See `references/beet-reference.md` for the 1.21+ `pack.mcmeta` template.
 
-This compiles to `data/mynamespace/function/main.mcfunction` in the output.
+### File placement — Bolt has two file types, not one
+
+This is the most common failure mode for first-time Bolt users.
+
+**Function with Bolt syntax** lives in `function/` with the **`.mcfunction`** extension:
+```
+src/data/mynamespace/function/main.mcfunction
+```
+With `bolt` + `mecha` in the pipeline, Bolt syntax (Python `for`/`def`/f-strings) is accepted inside `.mcfunction` files. This is what compiles to a callable `/function ns:main`.
+
+**Reusable Python module** imported by other Bolt code lives in `module/` (or `modules/` for pre-pack-format-48 packs) with the **`.bolt`** extension:
+```
+src/data/mynamespace/module/utils.bolt
+```
+This is what `.bolt` is actually scoped to (see Bolt's `Module.scope` in `bolt/module.py`). A `.bolt` file is **not** a Minecraft function and is not callable as `/function ns:name` — it's a library imported via `from mynamespace:utils import ...`.
+
+> **Pitfall.** A `.bolt` file placed under `function/` is loaded as a Python module and silently dropped from the data pack output. The build prints no warning. In-game, `/function ns:name` returns "Unknown function". If you see this symptom, check the file extension first.
 
 ---
 
@@ -135,16 +147,18 @@ $say Hello $(name)!
 
 ## Module system
 
-### Importing from other bolt files
+### Importing from other bolt modules
 ```python
-# In src/data/mynamespace/function/utils.bolt
+# In src/data/mynamespace/module/utils.bolt   (NOTE: module/, not function/)
 def heal(amount):
     effect give @s minecraft:instant_health 1 {amount}
 
-# In another .bolt file
+# In another file (function/<name>.mcfunction or module/<name>.bolt):
 from mynamespace:utils import heal
 heal(2)
 ```
+
+The import path uses the `<namespace>:<module-name>` form (no `module/` prefix in the path string — Bolt's resolver knows where modules live).
 
 ### Importing Python modules
 ```python
@@ -224,7 +238,7 @@ bolt-expressions creates the scoreboard objectives automatically at load time in
 
 ## Generated output structure
 
-Given `src/data/mynamespace/function/main.bolt`:
+Given `src/data/mynamespace/function/main.mcfunction` (Bolt-syntax inside `.mcfunction`):
 ```python
 from bolt_expressions import Scoreboard
 kills = Scoreboard.objective("kills")
@@ -247,7 +261,8 @@ data/minecraft/tags/function/load.json
 ## Tips
 
 - Bolt runs at build time — Python logic is fully evaluated; the output is plain `.mcfunction`
-- You can mix `.bolt` and `.mcfunction` files in the same project
+- You can mix `.bolt` (modules) and `.mcfunction` (functions, with or without Bolt syntax) in the same project. Remember: `.bolt` ↔ `module/`, `.mcfunction` ↔ `function/`. Cross those wires and the file silently disappears from the output.
+- F-string interpolation works inside `tellraw` JSON arguments and at selector/objective token positions, not just in plain command text — e.g. `tellraw @a {"text":f"Score: {n}"}` and `scoreboard players set @s f"obj_{i}" 0` both compile correctly.
 - Use `beet watch` during development for instant feedback
 - The compiled output in `build/` is valid, readable mcfunction — useful for debugging
 - Full bolt docs: https://mcbeet.dev (search "bolt" in the docs)

@@ -128,12 +128,12 @@ For the full beet config schema, Python plugin API, and pack_format table, read 
 
 ## Bolt approach
 
-Bolt lets you write `.bolt` files using Python-like syntax that compiles down to `.mcfunction`. It lives inside a beet project.
+Bolt lets you write Python-like syntax that compiles down to `.mcfunction`. It lives inside a beet project and is parsed by **mecha** (the compiler) with bolt's parser extensions layered on top.
 
 ### Install
 ```bash
 uv tool install beet
-uv add bolt              # or: pip install bolt
+uv add bolt mecha        # or: pip install bolt mecha
 ```
 
 ### beet.json with Bolt
@@ -142,15 +142,24 @@ uv add bolt              # or: pip install bolt
   "name": "my-pack",
   "output": "build",
   "require": ["bolt"],
-  "pipeline": ["bolt"],
+  "pipeline": ["bolt", "mecha"],
   "data_pack": {
     "load": ["src"]
   }
 }
 ```
 
-### Example .bolt file
-`src/data/mynamespace/function/main.bolt`:
+`bolt` registers the parser; `mecha` runs the compile step that emits `.mcfunction`. **Without `mecha` in the pipeline the build succeeds silently but the output `.mcfunction` files contain unexpanded Python source — loops never unroll, f-strings never interpolate.**
+
+### Where Bolt code lives — important
+
+There are two distinct file types:
+
+- **Function with Bolt syntax** → `src/data/<ns>/function/<name>.mcfunction`. Yes, `.mcfunction` extension. With `bolt` + `mecha` in the pipeline, Bolt syntax (Python `for`/`def`/f-strings) is parsed inside `.mcfunction` files. This is what becomes callable as `/function ns:name` in-game.
+- **Reusable Python module imported by other Bolt code** → `src/data/<ns>/module/<name>.bolt`. The `.bolt` extension is scoped to `module/` (or `modules/` pre-pack-format-48), not `function/`. A `.bolt` file under `function/` is loaded as a Python library and silently dropped from the data pack — you'll see no `.mcfunction` output for it and `/function ns:name` returns "Unknown function".
+
+### Example function with Bolt syntax
+`src/data/mynamespace/function/main.mcfunction`:
 ```python
 # Variables and loops compile to commands
 for i in range(5):

@@ -1,10 +1,9 @@
 {
   "name": "{{NAME}}",
   "description": "{{DESCRIPTION}}",
-  "minecraft": "{{MC_VERSION}}",
   "output": "build",
   "require": ["bolt"],
-  "pipeline": ["bolt"],
+  "pipeline": ["bolt", "mecha"],
   "data_pack": {
     "load": ["src"]
   }

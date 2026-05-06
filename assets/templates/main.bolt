@@ -1,4 +1,0 @@
-# Bolt entry point for {{NAME}}.
-# Bolt files compile to .mcfunction during `beet build`.
-
-say {{NAME}} bolt entry compiled

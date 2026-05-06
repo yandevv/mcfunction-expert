@@ -25,11 +25,60 @@ Docs: https://mcbeet.dev | Repo: https://github.com/mcbeet/beet
 | 1.21.2 – 1.21.3   | 57          |
 | 1.21.4            | 61          |
 | 1.21.5            | 71          |
+| 1.21.6 – 1.21.8   | 80          |
 
 Beet can also auto-detect pack_format from a version string:
 ```json
 { "minecraft": "1.21.4" }
 ```
+
+But see the warning in the next section before adding `"minecraft"` to a project that hand-writes its own `pack.mcmeta`.
+
+---
+
+## `pack.mcmeta` for 1.21+ compatibility
+
+Starting in 1.20.2, Minecraft began rejecting `pack.mcmeta` files that declare an unsupported format range. By 1.21.6+, three separate fields are required if you want a single pack to load across the whole 1.21.x line:
+
+```json
+{
+  "pack": {
+    "pack_format": 61,
+    "supported_formats": [61, 999],
+    "min_format": [61, 0],
+    "max_format": [999, 0],
+    "description": "..."
+  }
+}
+```
+
+- `pack_format` — legacy single integer, satisfies pre-1.20.2 readers.
+- `supported_formats` — **array** `[min, max]`. Required by 1.20.2+ when the declared format is in the 17–81 range. Some versions also accept the object form `{ "min_inclusive": …, "max_inclusive": … }`, but 1.21.11's error message instructs the array form, so prefer it.
+- `min_format` / `max_format` — tuples `[major, minor]`. Required by 1.21.6+ whenever the supported range extends past format 81.
+
+Omitting any one of these on 1.21.6+ will register the pack in `/datapack list` but silently fail to load functions, advancements, or scoreboards. The metadata-rejection error appears in `latest.log` but never in chat — which is what makes it confusing.
+
+### Beet silently overwrites hand-written `pack.mcmeta`
+
+Compounding the above: if `beet.json` contains a `"minecraft"` field, **beet auto-generates its own `pack.mcmeta` on every build and overwrites whatever you placed at the project root or in `src/`**. The auto-generated file uses fields like `min_format: [88, 0], max_format: [88, 0]` pinned to a single sub-version, which excludes most other 1.21.x sub-versions.
+
+Two safe configurations:
+
+1. **Let beet manage metadata** — set `"minecraft": "1.21.4"` in `beet.json`, do not write a `pack.mcmeta` yourself. Accept that beet's pinning may not be 1.21.x-cross-compatible.
+2. **Manage metadata yourself** — omit `"minecraft"` from `beet.json` entirely and place the file at `src/pack.mcmeta` (so beet's file-copy pipeline picks it up). The scaffolder (`scripts/scaffold_pack.py`) does this by default.
+
+### Troubleshooting: `/function ns:load` returns "Unknown function" but the pack is enabled
+
+A pack that registers in `/datapack list` but whose functions are unreachable in-game almost always means Minecraft rejected something at load time and only logged it. Check, in order:
+
+1. **`pack.mcmeta` format fields.** Tail the log:
+   ```bash
+   grep -i -E "<your-namespace>|metadata|format" \
+     "$HOME/Library/Application Support/minecraft/logs/latest.log" | tail -30
+   ```
+   If you see "missing mandatory fields min_format and max_format" or "requires a supported_formats field", apply the three-field template above.
+2. **Invalid statistic-criterion objective names.** A single bad `scoreboard objectives add` line invalidates the entire function file at load time, with "Unknown function" as the only in-game symptom. The bare statistic IDs (`minecraft.fish_caught`, `minecraft.player_killed_entity`) are not valid criteria — the correct form is `minecraft.custom:minecraft.fish_caught`, `minecraft.killed:<entity_id>`, etc. Grep `latest.log` for "objective" or "criterion" to confirm.
+3. **A `.bolt` file under `function/`.** Bolt scopes `.bolt` to `module/`; files with that extension under `function/` are loaded as Python modules and never written to the output. Rename to `.mcfunction` or move to `module/`. See `references/bolt-reference.md`.
 
 ---
 
