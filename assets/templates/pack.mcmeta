@@ -2,7 +2,7 @@
   "pack": {
     "pack_format": {{PACK_FORMAT}},
     "supported_formats": [{{PACK_FORMAT}}, 999],
-    "min_format": [{{PACK_FORMAT}}, 0],
+    "min_format": [{{PACK_FORMAT}}, {{PACK_FORMAT_MINOR}}],
     "max_format": [999, 0],
     "description": "{{DESCRIPTION}}"
   }

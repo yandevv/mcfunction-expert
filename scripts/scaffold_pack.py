@@ -30,17 +30,32 @@ import argparse
 import sys
 from pathlib import Path
 
-# pack_format values per https://minecraft.wiki/w/Pack_format. Newer entries
-# (1.21.6+) ship rapidly; if a target version isn't in the table, pass
-# --pack-format N rather than guessing.
-PACK_FORMATS = {
-    "1.20.5": 41, "1.20.6": 41,
-    "1.21": 48, "1.21.1": 48,
-    "1.21.2": 57, "1.21.3": 57,
-    "1.21.4": 61,
-    "1.21.5": 71,
-    "1.21.6": 80, "1.21.7": 80, "1.21.8": 80,
+# pack_format per https://minecraft.wiki/w/Pack_format, stored as
+# (major, minor) tuples. Pre-1.21.9 versions used a flat integer; 1.21.9+
+# introduced minor versions (e.g. 88.0, 94.1, 101.2). The pack.mcmeta
+# `pack_format` field always takes only the major; min_format/max_format
+# carry the minor in tuple form. Newer entries ship rapidly — if a target
+# version isn't in the table, pass --pack-format MAJOR[.MINOR] to override.
+PACK_FORMATS: dict[str, tuple[int, int]] = {
+    "1.20.5": (41, 0), "1.20.6": (41, 0),
+    "1.21":   (48, 0), "1.21.1": (48, 0),
+    "1.21.2": (57, 0), "1.21.3": (57, 0),
+    "1.21.4": (61, 0),
+    "1.21.5": (71, 0),
+    "1.21.6": (80, 0),
+    "1.21.7": (81, 0), "1.21.8": (81, 0),
+    "1.21.9": (88, 0), "1.21.10": (88, 0),
+    "1.21.11": (94, 1),
+    "26.1": (101, 1), "26.1.1": (101, 1), "26.1.2": (101, 1),
 }
+
+
+def parse_pack_format(spec: str) -> tuple[int, int]:
+    """Parse a --pack-format override like '94' or '94.1' → (94, 0) or (94, 1)."""
+    if "." in spec:
+        major, minor = spec.split(".", 1)
+        return (int(major), int(minor))
+    return (int(spec), 0)
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = SKILL_ROOT / "assets" / "templates"
@@ -65,21 +80,22 @@ def main() -> int:
     parser.add_argument("--mc-version", required=True, help="Target Minecraft version, e.g. 1.21.4.")
     parser.add_argument("--description", default=None, help="Pack description (defaults to name).")
     parser.add_argument("--with-bolt", action="store_true", help="Include Bolt setup (require + pipeline + Bolt-syntax main.mcfunction).")
-    parser.add_argument("--pack-format", type=int, default=None, help="Override the pack_format from the version table (use for versions newer than the table).")
+    parser.add_argument("--pack-format", default=None, help="Override the pack_format from the version table. Accepts MAJOR or MAJOR.MINOR (e.g. 94 or 94.1).")
     parser.add_argument("--out", default=None, help="Output directory (defaults to ./<name>).")
     args = parser.parse_args()
 
     if args.pack_format is not None:
-        pack_format = args.pack_format
+        pf = parse_pack_format(args.pack_format)
     else:
-        pack_format = PACK_FORMATS.get(args.mc_version)
-        if pack_format is None:
+        pf = PACK_FORMATS.get(args.mc_version)
+        if pf is None:
             sys.stderr.write(
                 f"error: unknown Minecraft version {args.mc_version!r}. "
                 f"Known: {', '.join(sorted(PACK_FORMATS))}. "
-                f"Pass --pack-format N to bypass the table.\n"
+                f"Pass --pack-format MAJOR[.MINOR] to bypass the table.\n"
             )
             return 2
+    pack_format_major, pack_format_minor = pf
 
     out = Path(args.out or args.name).resolve()
     if out.exists() and any(out.iterdir()):
@@ -91,7 +107,8 @@ def main() -> int:
         "NAME": args.name,
         "NAMESPACE": args.namespace,
         "DESCRIPTION": description,
-        "PACK_FORMAT": str(pack_format),
+        "PACK_FORMAT": str(pack_format_major),
+        "PACK_FORMAT_MINOR": str(pack_format_minor),
         "MC_VERSION": args.mc_version,
     }
 
@@ -118,7 +135,8 @@ def main() -> int:
         # those belong in module/ as importable Python modules.
         write(fn_dir / "main.mcfunction", render("main.mcfunction", subs))
 
-    print(f"Scaffolded {args.name} ({args.mc_version}, pack_format {pack_format}) at {out}")
+    pf_display = f"{pack_format_major}.{pack_format_minor}" if pack_format_minor else str(pack_format_major)
+    print(f"Scaffolded {args.name} ({args.mc_version}, pack_format {pf_display}) at {out}")
     print("Next steps:")
     if args.with_bolt:
         print("  uv tool install beet && uv add bolt mecha")
